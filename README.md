@@ -57,7 +57,7 @@ Plant diseases can drastically affect crop yield and quality. Early and accurate
 - **OpenCV**, **PIL** for image preprocessing  
 - **Streamlit** for web interface  
 - **Kotlin** & **Android Studio** for mobile application  
-- **Google Colab** for training environment  
+- **kaggle** for training environment  
 
 ---
 
