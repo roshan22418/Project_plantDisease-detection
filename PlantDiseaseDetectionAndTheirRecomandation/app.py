@@ -772,5 +772,5 @@ def main():
                 st.error(f"Error loading performance metrics: {e}")
                 st.warning("Performance visualizations may not be available.")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
