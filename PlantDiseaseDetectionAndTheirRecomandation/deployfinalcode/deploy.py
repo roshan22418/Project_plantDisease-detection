@@ -1,6 +1,6 @@
 # deploy.py - Streamlit web application for plant disease detection with LLM integration
 import streamlit as st
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import requests
 import os
 import hashlib
@@ -420,6 +420,53 @@ def generate_unrecognized_markdown(confidence, threshold=20.0):
     - Use a uniform background if possible
     """
 
+# Render a stored detection result and its treatment advice
+def show_results(result):
+    st.subheader("Detection Results")
+
+    # Display top prediction with confidence
+    predicted_class, top_probability = result["predictions"][0]
+    confidence = top_probability * 100
+    threshold = st.session_state.detection_threshold
+
+    if confidence < threshold:
+        st.warning("🔍 Low Confidence Prediction")
+        st.markdown(generate_unrecognized_markdown(confidence, threshold))
+        return
+
+    st.markdown(f"### Detected Disease: **{format_label(predicted_class)}**")
+    st.progress(confidence / 100)
+    st.markdown(f"Confidence: **{confidence:.2f}%**")
+
+    # Show alternative possibilities
+    st.markdown("### Alternative Possibilities")
+    for alt_class, alt_probability in result["predictions"][1:]:
+        st.markdown(f"- {format_label(alt_class)}: {alt_probability * 100:.2f}%")
+
+    # Generate advice once per detection and LLM choice; reruns reuse it
+    st.subheader("Treatment Advisory")
+    if result.get("advice_llm") != st.session_state.llm_option:
+        with st.spinner("Generating treatment advice..."):
+            try:
+                result["advice"] = get_advice(
+                    predicted_class,
+                    llm_option=st.session_state.llm_option,
+                    api_key=get_api_key(),
+                    temperature=st.session_state.temperature
+                )
+            except Exception as e:
+                st.error(f"Error generating treatment advice: {e}")
+                result["advice"] = get_fallback_advice(predicted_class)
+        result["advice_llm"] = st.session_state.llm_option
+    st.markdown(result["advice"])
+
+    st.download_button(
+        label="Download Treatment Plan",
+        data=result["advice"],
+        file_name=f"{predicted_class}_treatment.md",
+        mime="text/markdown"
+    )
+
 # The visitor's own OpenAI key, else the server's OPENAI_API_KEY. Kept in session state,
 # never in os.environ, which is shared by every session on the server.
 def get_api_key():
@@ -524,65 +571,32 @@ def main():
             st.info(f"Using {llm_options[st.session_state.llm_option]} for advice generation")
             
             if uploaded_file is not None:
-                image = Image.open(uploaded_file).convert('RGB')
-                st.image(image, caption='Uploaded Image', use_container_width=True)
-                
-                # Make prediction when button is clicked
-                if st.button('Detect Disease'):
-                    with st.spinner('Analyzing image...'):
-                        # Top 3 (class name, probability) pairs
-                        predictions = plant_model.predict(load_model(), image, top_k=3)
+                try:
+                    image = Image.open(uploaded_file).convert('RGB')
+                except (UnidentifiedImageError, Image.DecompressionBombError, OSError):
+                    image = None
+                    st.error("Could not read this file as an image. Please upload a JPG or PNG photo of a leaf.")
 
-                        # Display results
+                if image is not None:
+                    st.image(image, caption='Uploaded Image', width="stretch")
+
+                    # Make prediction when button is clicked
+                    if st.button('Detect Disease'):
+                        with st.spinner('Analyzing image...'):
+                            st.session_state.result = {
+                                "file_id": uploaded_file.file_id,
+                                # Top 3 (class name, probability) pairs
+                                "predictions": plant_model.predict(load_model(), image, top_k=3),
+                            }
                         st.success('Analysis complete!')
 
-                        # Display prediction results in the second column
+                    # Keep showing this image's result on later reruns (download
+                    # button, sidebar changes, ...) instead of only right after the click
+                    result = st.session_state.get("result")
+                    if result is not None and result["file_id"] == uploaded_file.file_id:
                         with col2:
-                            st.subheader("Detection Results")
+                            show_results(result)
 
-                            # Display top prediction with confidence
-                            predicted_class = predictions[0][0]
-                            confidence = predictions[0][1] * 100
-                            threshold = st.session_state.detection_threshold
-
-                            if confidence < threshold:
-                                st.warning("🔍 Low Confidence Prediction")
-                                st.markdown(generate_unrecognized_markdown(confidence, threshold))
-                            else:
-                                st.markdown(f"### Detected Disease: **{format_label(predicted_class)}**")
-                                st.progress(confidence / 100)
-                                st.markdown(f"Confidence: **{confidence:.2f}%**")
-
-                                # Show alternative possibilities
-                                st.markdown("### Alternative Possibilities")
-                                for alt_class, alt_probability in predictions[1:]:
-                                    st.markdown(f"- {format_label(alt_class)}: {alt_probability * 100:.2f}%")
-
-                                # Get treatment advice for the detected disease with loading indicator
-                                st.subheader("Treatment Advisory")
-                                with st.spinner("Generating treatment advice..."):
-                                    try:
-                                        # Use the selected LLM option from session state
-                                        treatment_advice = get_advice(
-                                            predicted_class, 
-                                            llm_option=st.session_state.llm_option,
-                                            api_key=get_api_key(),
-                                            temperature=st.session_state.temperature
-                                        )
-                                        st.markdown(treatment_advice)
-                                        
-                                        # Add option to download the advice as PDF
-                                        st.download_button(
-                                            label="Download Treatment Plan",
-                                            data=treatment_advice,
-                                            file_name=f"{predicted_class}_treatment.md",
-                                            mime="text/markdown"
-                                        )
-                                    except Exception as e:
-                                        st.error(f"Error generating treatment advice: {e}")
-                                        st.markdown(get_fallback_advice(predicted_class))
-
-                            
         # If no file is uploaded, show some information
         if uploaded_file is None:
             with col2:
