@@ -68,7 +68,9 @@ def test_predict_sample_image():
         at.file_uploader[0].upload("leaf.jpg", f.read(), "image/jpeg").run()
     click(at, "Predict")
     assert not at.exception
-    assert "Apple___Cedar_apple_rust" in at.success[0].value
+    # readable label: raw names lose underscores when st.success renders them as Markdown
+    assert "Apple - Cedar apple rust" in at.success[0].value
+    assert "_" not in at.success[0].value
 
 
 def test_unreadable_upload_shows_error():

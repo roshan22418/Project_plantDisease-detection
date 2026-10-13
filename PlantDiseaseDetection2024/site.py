@@ -49,6 +49,10 @@ CLASS_NAMES = [
     'Tomato___healthy',
 ]
 
+#Readable label; st.success renders Markdown, which swallows the underscores in raw names
+def readable(class_name):
+    return class_name.replace("___", " - ").replace("_", " ").strip()
+
 #Load the model once per server process instead of on every prediction
 @st.cache_resource
 def load_model():
@@ -124,4 +128,4 @@ elif(app_mode=="Disease Recognition"):
             else:
                 st.snow()
                 st.write("Our Prediction")
-                st.success("Model is Predicting it's a {} ({:.1%} confidence)".format(CLASS_NAMES[result_index], confidence))
+                st.success("Model is Predicting it's a {} ({:.1%} confidence)".format(readable(CLASS_NAMES[result_index]), confidence))
