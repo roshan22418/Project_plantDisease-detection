@@ -563,91 +563,91 @@ def main():
                 - Avoid shadows and glare
                 """)
         
-        elif page == "About":
-            st.subheader("About This Project")
-            st.markdown("""
-            ## Plant Disease Detection with AI
+    elif page == "About":
+        st.subheader("About This Project")
+        st.markdown("""
+        ## Plant Disease Detection with AI
             
-            This application uses deep learning to detect plant diseases from images. It combines:
+        This application uses deep learning to detect plant diseases from images. It combines:
             
-            1. **Convolutional Neural Networks (CNN)** trained on 50+ plant species and their diseases
-            2. **Transfer Learning** with ResNet50 architecture for improved accuracy
-            3. **Natural Language Processing (NLP)** to provide detailed treatment recommendations
+        1. **Convolutional Neural Networks (CNN)** trained on 50+ plant species and their diseases
+        2. **Transfer Learning** with ResNet50 architecture for improved accuracy
+        3. **Natural Language Processing (NLP)** to provide detailed treatment recommendations
             
-            ### Data Source
-            The model was trained on the Plant Village dataset containing thousands of images across multiple plant species and disease categories.
+        ### Data Source
+        The model was trained on the Plant Village dataset containing thousands of images across multiple plant species and disease categories.
             
-            ### LLM Integration
-            This application leverages state-of-the-art language models to provide personalized treatment advice:
+        ### LLM Integration
+        This application leverages state-of-the-art language models to provide personalized treatment advice:
             
-            - **Multiple LLM Options**: Choose between different language models based on your needs
-            - **GPT-4o-mini**: Latest OpenAI model for high quality agricultural advice
-            - **Offline Fallback**: Even without internet access, the system provides reliable advice
+        - **Multiple LLM Options**: Choose between different language models based on your needs
+        - **GPT-4o-mini**: Latest OpenAI model for high quality agricultural advice
+        - **Offline Fallback**: Even without internet access, the system provides reliable advice
             
-            ### Team
-            Developed as part of an agricultural AI initiative to help farmers identify and treat plant diseases more effectively and sustainably.
+        ### Team
+        Developed as part of an agricultural AI initiative to help farmers identify and treat plant diseases more effectively and sustainably.
             
-            ### Future Updates
-            - Mobile app for offline use
-            - Integration with weather data for contextualized advice
-            - Region-specific treatment recommendations
-            - Disease progression prediction
-            """)
+        ### Future Updates
+        - Mobile app for offline use
+        - Integration with weather data for contextualized advice
+        - Region-specific treatment recommendations
+        - Disease progression prediction
+        """)
 
     
-        elif page == "How It Works":
-            st.subheader("How It Works")
+    elif page == "How It Works":
+        st.subheader("How It Works")
             
-            st.markdown("""
-            ### Machine Learning Pipeline
+        st.markdown("""
+        ### Machine Learning Pipeline
             
-            This application uses a sophisticated AI pipeline to detect plant diseases:
+        This application uses a sophisticated AI pipeline to detect plant diseases:
             
-            1. **Image Processing**:
-            - Your uploaded image is resized and normalized
-            - Data augmentation techniques improve model robustness
+        1. **Image Processing**:
+        - Your uploaded image is resized and normalized
+        - Data augmentation techniques improve model robustness
             
-            2. **Disease Detection**:
-            - A CNN-based neural network analyzes the image
-            - The model was trained on 38 disease classes across different plants
-            - Transfer learning improves accuracy even with limited training data
+        2. **Disease Detection**:
+        - A CNN-based neural network analyzes the image
+        - The model was trained on 38 disease classes across different plants
+        - Transfer learning improves accuracy even with limited training data
             
-            3. **Advisory System**:
-            - Large Language Models generate contextual treatment advice
-            - Multiple LLM options available based on your needs:
-                - Llama-2-7b: High quality, comprehensive advice
-                - Phi-2: Faster, lightweight option
-                - GPT-3.5: API-based option with excellent response quality
-                - Offline mode: Uses predefined responses for key diseases
-            - Recommendations include organic and chemical treatment options
-            - Preventive measures and best practices are provided
+        3. **Advisory System**:
+        - Large Language Models generate contextual treatment advice
+        - Multiple LLM options available based on your needs:
+            - Llama-2-7b: High quality, comprehensive advice
+            - Phi-2: Faster, lightweight option
+            - GPT-3.5: API-based option with excellent response quality
+            - Offline mode: Uses predefined responses for key diseases
+        - Recommendations include organic and chemical treatment options
+        - Preventive measures and best practices are provided
             
-            ### Technologies Used
+        ### Technologies Used
             
-            - **PyTorch**: Deep learning framework for model development
-            - **Streamlit**: Web application framework
-            - **Transformers**: NLP models for treatment recommendations
-            - **Transfer Learning**: Leveraging pre-trained neural networks
+        - **PyTorch**: Deep learning framework for model development
+        - **Streamlit**: Web application framework
+        - **Transformers**: NLP models for treatment recommendations
+        - **Transfer Learning**: Leveraging pre-trained neural networks
             
-            ### Technical Performance
+        ### Technical Performance
             
-            - Model Accuracy: ~96% on test dataset
-            - Inference Time: 0.2-0.5 seconds per image
-            - Support for 38+ different plant disease categories
-            """)
-            # Add a sample confusion matrix or performance visualization
-            try:
-                # Load confusion matrix visualization
-                cm_path = os.path.join(plant_model.MODEL_DIR, 'confusion_matrix.png')
-                if os.path.exists(cm_path):
-                    st.subheader("Confusion Matrix")
-                    st.image(cm_path)
-                else:
-                    st.info("Confusion matrix visualization not available.")
+        - Model Accuracy: ~96% on test dataset
+        - Inference Time: 0.2-0.5 seconds per image
+        - Support for 38+ different plant disease categories
+        """)
+        # Add a sample confusion matrix or performance visualization
+        try:
+            # Load confusion matrix visualization
+            cm_path = os.path.join(plant_model.MODEL_DIR, 'confusion_matrix.png')
+            if os.path.exists(cm_path):
+                st.subheader("Confusion Matrix")
+                st.image(cm_path)
+            else:
+                st.info("Confusion matrix visualization not available.")
                     
-            except Exception as e:
-                st.error(f"Error loading performance metrics: {e}")
-                st.warning("Performance visualizations may not be available.")
+        except Exception as e:
+            st.error(f"Error loading performance metrics: {e}")
+            st.warning("Performance visualizations may not be available.")
 
 if __name__ == "__main__":
     main()
