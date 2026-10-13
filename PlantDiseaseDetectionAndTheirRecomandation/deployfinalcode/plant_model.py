@@ -221,3 +221,8 @@ def format_label(class_name):
     plant = plant[:1].upper() + plant[1:]
     disease = disease[:1].upper() + disease[1:]
     return f"{plant} - {disease}" if disease else plant
+
+
+def supported_plants(class_names):
+    """Sorted plant names covered by the labels, e.g. ['Apple', 'Blueberry', ...]"""
+    return sorted({format_label(name).split(" - ")[0] for name in class_names})

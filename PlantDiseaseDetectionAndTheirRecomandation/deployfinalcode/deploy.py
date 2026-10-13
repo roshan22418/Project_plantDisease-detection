@@ -7,7 +7,7 @@ import hashlib
 import threading
 
 import plant_model
-from plant_model import format_label
+from plant_model import format_label, supported_plants
 
 
 # Load the model; architecture, labels and preprocessing are detected from the checkpoint
@@ -451,9 +451,19 @@ def main():
         st.session_state.detection_threshold = 20.0
     
     st.title("🌿 AI-Powered Plant Disease Detection")
-    st.markdown("""
+
+    # Load the model up front so a missing or mismatched checkpoint is reported immediately
+    try:
+        loaded = load_model()
+    except Exception as e:
+        st.error(f"Could not load the disease detection model: {e}")
+        st.stop()
+    plants = supported_plants(loaded.class_names)
+
+    st.markdown(f"""
     Upload an image of a plant leaf to identify diseases and get treatment recommendations.
-    This system can identify diseases across 50+ plant species including wheat, rice, corn, apple, tomato, and more.
+    The current model recognises {len(loaded.class_names)} classes across {len(plants)} plant species:
+    {" · ".join(plants)}.
     """)
     
     # Sidebar for app navigation and settings
@@ -509,7 +519,7 @@ def main():
         st.markdown("### Detection Settings")
         detection_threshold = st.slider(
             "Detection confidence threshold (%)",
-            min_value=40.0,
+            min_value=0.0,
             max_value=90.0,
             value=st.session_state.detection_threshold,
             step=5.0,
@@ -549,7 +559,7 @@ def main():
                             st.session_state.result = {
                                 "file_id": uploaded_file.file_id,
                                 # Top 3 (class name, probability) pairs
-                                "predictions": plant_model.predict(load_model(), image, top_k=3),
+                                "predictions": plant_model.predict(loaded, image, top_k=3),
                             }
                         st.success('Analysis complete!')
 
@@ -564,13 +574,8 @@ def main():
         if uploaded_file is None:
             with col2:
                 st.info("👈 Upload an image to get started!")
+                st.markdown("### Supported Plants\n" + "\n".join(f"- {plant}" for plant in plants))
                 st.markdown("""
-                ### Supported Plants
-                This system can detect diseases in various plants including:
-                - Fruit plants (Apple, Grape, Orange, Peach, Strawberry)
-                - Vegetables (Potato, Tomato, Pepper, Squash, Corn)
-                - Crops (Rice, Wheat, Soybean, Cotton)
-                
                 ### How to Get Best Results
                 - Take clear photos in good lighting
                 - Focus on affected leaves or parts
@@ -585,19 +590,19 @@ def main():
             
         This application uses deep learning to detect plant diseases from images. It combines:
             
-        1. **Convolutional Neural Networks (CNN)** trained on 50+ plant species and their diseases
-        2. **Transfer Learning** with ResNet50 architecture for improved accuracy
-        3. **Natural Language Processing (NLP)** to provide detailed treatment recommendations
+        1. **Convolutional Neural Networks (CNN)**: a custom 5-block CNN trained on 45 classes (14 PlantVillage crops plus rice and wheat)
+        2. **Transfer Learning**: an ImageNet-pretrained ResNet-50 fine-tuned on the 38 PlantVillage classes
+        3. **Large Language Models** to provide detailed treatment recommendations
             
         ### Data Source
-        The model was trained on the Plant Village dataset containing thousands of images across multiple plant species and disease categories.
+        The models were trained on the New Plant Diseases Dataset (augmented PlantVillage, 38 classes). The 45-class CNN also uses rice and wheat images from the Five Crop Diseases dataset.
             
         ### LLM Integration
         This application leverages state-of-the-art language models to provide personalized treatment advice:
             
         - **Multiple LLM Options**: Choose between different language models based on your needs
-        - **GPT-4o-mini**: Latest OpenAI model for high quality agricultural advice
-        - **Offline Fallback**: Even without internet access, the system provides reliable advice
+        - **GPT-4o-mini / GPT-3.5 Turbo**: OpenAI models (requires an API key)
+        - **Offline Fallback**: Without an LLM, built-in advice is shown for common diseases and healthy plants
             
         ### Team
         Developed as part of an agricultural AI initiative to help farmers identify and treat plant diseases more effectively and sustainably.
@@ -613,26 +618,26 @@ def main():
     elif page == "How It Works":
         st.subheader("How It Works")
             
-        st.markdown("""
+        st.markdown(f"""
         ### Machine Learning Pipeline
             
         This application uses a sophisticated AI pipeline to detect plant diseases:
             
         1. **Image Processing**:
-        - Your uploaded image is resized and normalized
-        - Data augmentation techniques improve model robustness
+        - Your uploaded image is resized and normalized exactly as during training
+        - The models were trained with data augmentation for robustness
             
         2. **Disease Detection**:
         - A CNN-based neural network analyzes the image
-        - The model was trained on 38 disease classes across different plants
-        - Transfer learning improves accuracy even with limited training data
+        - The loaded model ({"ResNet-50" if loaded.arch == "resnet50" else "custom CNN"}) predicts {len(loaded.class_names)} classes across {len(plants)} plant species
+        - Predictions below the confidence threshold (Settings) are reported as unrecognised
             
         3. **Advisory System**:
         - Large Language Models generate contextual treatment advice
         - Multiple LLM options available based on your needs:
             - Llama-2-7b: High quality, comprehensive advice
             - Phi-2: Faster, lightweight option
-            - GPT-3.5: API-based option with excellent response quality
+            - GPT-4o-mini / GPT-3.5: API-based options (OpenAI key required)
             - Offline mode: Uses predefined responses for key diseases
         - Recommendations include organic and chemical treatment options
         - Preventive measures and best practices are provided
@@ -646,16 +651,15 @@ def main():
             
         ### Technical Performance
             
-        - Model Accuracy: ~96% on test dataset
-        - Inference Time: 0.2-0.5 seconds per image
-        - Support for 38+ different plant disease categories
+        - ResNet-50 (38 classes): about 97% on the 17,572-image validation split (confusion matrix below)
+        - Custom CNN (45 classes): 96.8% on a 12,435-image held-out split
         """)
         # Add a sample confusion matrix or performance visualization
         try:
             # Load confusion matrix visualization
             cm_path = os.path.join(plant_model.MODEL_DIR, 'confusion_matrix.png')
             if os.path.exists(cm_path):
-                st.subheader("Confusion Matrix")
+                st.subheader("Confusion Matrix (ResNet-50, validation split)")
                 st.image(cm_path)
             else:
                 st.info("Confusion matrix visualization not available.")
