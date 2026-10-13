@@ -21,14 +21,12 @@ LLM_CONFIG = {
         "name": "GPT-4o-mini",
         "api_url": "https://api.openai.com/v1/chat/completions",
         "model_id": "gpt-4o-mini",
-        "temperature": 0.7,
         "needs_api_key": True
     },
     "gpt35_turbo": {
         "name": "GPT-3.5 Turbo",
         "api_url": "https://api.openai.com/v1/chat/completions",
         "model_id": "gpt-3.5-turbo",
-        "temperature": 0.7,
         "needs_api_key": True
     },
     "llama2": {
@@ -140,7 +138,7 @@ def create_disease_prompt(disease_name):
     """
 
 # Get treatment advice from LLM
-def get_advice(disease_name, llm_option="gpt4o_mini"):
+def get_advice(disease_name, llm_option="gpt4o_mini", api_key=None, temperature=0.7):
     # Check cache first
     cache_key = create_response_hash(disease_name, llm_option)
     cached_response = advice_cache.get(cache_key)
@@ -153,7 +151,10 @@ def get_advice(disease_name, llm_option="gpt4o_mini"):
     try:
         # Check which LLM option is selected
         if "api_url" in LLM_CONFIG.get(llm_option, {}):
-            response = get_api_advice(prompt, LLM_CONFIG[llm_option])
+            if not api_key:
+                st.info("No OpenAI API key set, so showing offline advice instead.")
+                return get_fallback_advice(disease_name)
+            response = get_api_advice(prompt, LLM_CONFIG[llm_option], api_key, temperature)
         elif llm_option == "offline":
             response = get_fallback_advice(disease_name)
         else:
@@ -175,10 +176,10 @@ def get_advice(disease_name, llm_option="gpt4o_mini"):
         return get_fallback_advice(disease_name)
 
 # Get advice using API-based LLM (like OpenAI)
-def get_api_advice(prompt, config):
+def get_api_advice(prompt, config, api_key, temperature=0.7):
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
+        "Authorization": f"Bearer {api_key}"
     }
     
     payload = {
@@ -187,7 +188,7 @@ def get_api_advice(prompt, config):
             {"role": "system", "content": "You are an agricultural expert that specializes in plant diseases and their treatments."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": config.get("temperature", 0.7),
+        "temperature": temperature,
         "max_tokens": 1000
     }
     
@@ -388,13 +389,22 @@ def generate_unrecognized_markdown(confidence, threshold=20.0):
     - Use a uniform background if possible
     """
 
+# The visitor's own OpenAI key, else the server's OPENAI_API_KEY. Kept in session state,
+# never in os.environ, which is shared by every session on the server.
+def get_api_key():
+    return st.session_state.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+
 # Main Streamlit app
 def main():
     st.set_page_config(page_title="Plant Disease Detection", page_icon="🌿", layout="wide")
     
     # Initialize session state
     if 'llm_option' not in st.session_state:
-        st.session_state.llm_option = "gpt4o_mini"
+        # GPT models need a key, so start in offline mode unless the server provides one
+        st.session_state.llm_option = "gpt4o_mini" if os.getenv("OPENAI_API_KEY") else "offline"
+
+    if 'temperature' not in st.session_state:
+        st.session_state.temperature = 0.7
     
     if 'detection_threshold' not in st.session_state:
         st.session_state.detection_threshold = 20.0
@@ -426,10 +436,9 @@ def main():
     
     # API Key input if needed
     if LLM_CONFIG[st.session_state.llm_option].get("needs_api_key", False):
-        api_key = st.sidebar.text_input("OpenAI API Key:", type="password", 
-                                       help="Required for GPT models")
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
+        st.sidebar.text_input("OpenAI API Key:", type="password", key="openai_api_key",
+                              help="Required for GPT models. Used only for your session.")
+        if get_api_key():
             st.sidebar.success("✅ API key configured")
         else:
             st.sidebar.warning("⚠️ API key required for this model")
@@ -446,17 +455,14 @@ def main():
             
             # Model-specific settings for API models
             if st.session_state.llm_option in ["gpt4o_mini", "gpt35_turbo"]:
-                temperature = st.slider(
+                st.session_state.temperature = st.slider(
                     "Temperature (Creativity)",
                     min_value=0.0,
                     max_value=1.0,
-                    value=LLM_CONFIG[st.session_state.llm_option].get("temperature", 0.7),
+                    value=st.session_state.temperature,
                     step=0.1,
                     help="Higher values make output more creative but potentially less accurate"
                 )
-                
-                # Update the config
-                LLM_CONFIG[st.session_state.llm_option]["temperature"] = temperature
                 
         # Detection Threshold
         st.markdown("### Detection Settings")
@@ -529,7 +535,9 @@ def main():
                                         # Use the selected LLM option from session state
                                         treatment_advice = get_advice(
                                             predicted_class, 
-                                            llm_option=st.session_state.llm_option
+                                            llm_option=st.session_state.llm_option,
+                                            api_key=get_api_key(),
+                                            temperature=st.session_state.temperature
                                         )
                                         st.markdown(treatment_advice)
                                         
