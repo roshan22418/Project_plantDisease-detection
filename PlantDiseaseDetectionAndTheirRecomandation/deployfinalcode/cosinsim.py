@@ -1,7 +1,10 @@
+
 import os
 import io
 import json
+import sys
 import zipfile
+from functools import lru_cache
 from PIL import Image
 import torch
 import torch.nn as nn
@@ -15,15 +18,18 @@ preprocess = transforms.Compose([
                          std=[0.229, 0.224, 0.225]),
 ])
 
-# 2. Backbone for embeddings
-backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-backbone = nn.Sequential(*list(backbone.children())[:-1])
-backbone.eval()
+# 2. Backbone for embeddings, built on first use rather than at import time
+@lru_cache(maxsize=1)
+def get_backbone():
+    backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+    backbone = nn.Sequential(*list(backbone.children())[:-1])
+    backbone.eval()
+    return backbone
 
 @torch.no_grad()
 def get_embedding_from_pil(img: Image.Image):
     x = preprocess(img).unsqueeze(0)
-    e = backbone(x).squeeze()
+    e = get_backbone()(x).squeeze()
     return e / e.norm()
 
 def create_archive_with_index(classes_root: str, archive_path: str = "images.bin"):
@@ -32,7 +38,7 @@ def create_archive_with_index(classes_root: str, archive_path: str = "images.bin
     each class to its list of paths inside the archive.
     """
     index = {}
-    with zipfile.ZipFile(archive_path, "w", ZIP_DEFLATED := zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for cls in sorted(os.listdir(classes_root)):
             folder = os.path.join(classes_root, cls)
             if not os.path.isdir(folder):
@@ -48,68 +54,56 @@ def create_archive_with_index(classes_root: str, archive_path: str = "images.bin
         zf.writestr("index.json", json.dumps(index))
     print(f"Archive '{archive_path}' created with index for {len(index)} classes.")
 
-def avg_cosine_scores_from_archive(archive_path: str, query_img_path: str):
+@lru_cache(maxsize=4)
+def load_class_embeddings(archive_path: str):
     """
-    Load 'index.json' from the archive, then for each class compute
-    and print the average cosine similarity against query_img_path.
+    Embed every reference image in the archive once and return
+    {class: mean embedding}. The average cosine similarity of a query q
+    against a class is mean_i(q . e_i) = q . mean_i(e_i), so a query only
+    needs one dot product per class instead of re-embedding every image.
+    Classes without readable images are left out.
     """
-    # load query embedding
-    query_img = Image.open(query_img_path).convert("RGB")
-    q_embed   = get_embedding_from_pil(query_img)
-
+    class_means = {}
     with zipfile.ZipFile(archive_path, "r") as zf:
-        # load the index
         index = json.loads(zf.read("index.json").decode("utf-8"))
-
         for cls, rel_list in index.items():
-            sims = []
+            embeds = []
             for rel in rel_list:
                 try:
                     data = zf.read(rel)
                     img  = Image.open(io.BytesIO(data)).convert("RGB")
-                    e    = get_embedding_from_pil(img)
-                    sims.append(float(torch.dot(q_embed, e)))
+                    embeds.append(get_embedding_from_pil(img))
                 except KeyError:
                     print(f"  Missing entry in archive: {rel}")
                 except Exception as ex:
                     print(f"  Error {rel}: {ex}")
-            if sims:
-                avg = sum(sims) / len(sims)
-                print(f"Class '{cls}': avg cosine = {avg:.4f}")
-            else:
-                print(f"Class '{cls}': no images in archive.")
+            if embeds:
+                class_means[cls] = torch.stack(embeds).mean(dim=0)
+    return class_means
+
+def class_similarities(archive_path: str, query_img: Image.Image):
+    """Return {class: average cosine similarity} of query_img against each class."""
+    q_embed = get_embedding_from_pil(query_img)
+    return {cls: float(torch.dot(q_embed, mean))
+            for cls, mean in load_class_embeddings(archive_path).items()}
+
+def avg_cosine_scores_from_archive(archive_path: str, query_img_path: str):
+    """
+    Print the average cosine similarity of query_img_path against each class.
+    """
+    query_img = Image.open(query_img_path).convert("RGB")
+    for cls, avg in class_similarities(archive_path, query_img).items():
+        print(f"Class '{cls}': avg cosine = {avg:.4f}")
 
 def similarity(archive_path: str, query_img):
     """
-    Load 'index.json' from the archive, then for each class compute
-    and print the average cosine similarity against query_img_path.
+    Return the highest per-class average cosine similarity of query_img
+    (a PIL image) against the reference images in the archive.
     """
-    # load query embedding
-    #query_img = Image.open(query_img_path).convert("RGB")
-    q_embed   = get_embedding_from_pil(query_img)
-
-    with zipfile.ZipFile(archive_path, "r") as zf:
-        # load the index
-        index = json.loads(zf.read("index.json").decode("utf-8"))
-        avsims=[]
-        for cls, rel_list in index.items():
-            
-            sims = []
-            for rel in rel_list:
-                try:
-                    data = zf.read(rel)
-                    img  = Image.open(io.BytesIO(data)).convert("RGB")
-                    e    = get_embedding_from_pil(img)
-                    sims.append(float(torch.dot(q_embed, e)))
-                except KeyError:
-                    print(f"  Missing entry in archive: {rel}")
-                except Exception as ex:
-                    print(f"  Error {rel}: {ex}")
-            if sims:
-                avg = sum(sims) / len(sims)
-                avsims.append(avg)
-
-    return max(avsims)
+    scores = class_similarities(archive_path, query_img)
+    if not scores:
+        raise ValueError(f"No readable reference images in '{archive_path}'")
+    return max(scores.values())
 
 
 
@@ -118,4 +112,6 @@ if __name__ == "__main__":
     #create_archive_with_index("images", "images.bin")
     # 2) Run similarity check solely from archive
     #avg_cosine_scores_from_archive("images.bin", "test/3.jpg")
-    print(similarity("images.bin", "test/mango.jpg"))
+    if len(sys.argv) != 2:
+        sys.exit("usage: python cosinsim.py <query image>")
+    print(similarity("images.bin", Image.open(sys.argv[1]).convert("RGB")))

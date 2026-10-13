@@ -1,111 +1,19 @@
-# app.py - Enhanced Streamlit web application for plant disease detection with LLM integration
+# deploy.py - Streamlit web application for plant disease detection with LLM integration
 import streamlit as st
-import torch
-import torchvision.transforms as transforms
-from PIL import Image
-import json
-import numpy as np
+from PIL import Image, UnidentifiedImageError
 import requests
-import io 
 import os
 import hashlib
-import time
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import threading
+
+import plant_model
+from plant_model import format_label, supported_plants
 
 
-class PlantDiseaseModel(nn.Module):
-    def __init__(self, num_classes=45):
-        super(PlantDiseaseModel, self).__init__()
-
-        # Block 1
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.dropout1 = nn.Dropout(0.3)
-
-        # Block 2
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm2d(128)
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.dropout2 = nn.Dropout(0.3)
-
-        # Block 3
-        self.conv5 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.bn5 = nn.BatchNorm2d(256)
-        self.conv6 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.bn6 = nn.BatchNorm2d(256)
-        self.pool3 = nn.MaxPool2d(2, 2)
-        self.dropout3 = nn.Dropout(0.4)
-
-        # Block 4
-        self.conv7 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
-        self.bn7 = nn.BatchNorm2d(512)
-        self.conv8 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.bn8 = nn.BatchNorm2d(512)
-        self.pool4 = nn.MaxPool2d(2, 2)
-        self.dropout4 = nn.Dropout(0.4)
-
-        # Block 5 (Extra Layers for Depth)
-        self.conv9 = nn.Conv2d(512, 1024, kernel_size=3, padding=1)
-        self.bn9 = nn.BatchNorm2d(1024)
-        self.conv10 = nn.Conv2d(1024, 1024, kernel_size=3, padding=1)
-        self.bn10 = nn.BatchNorm2d(1024)
-        self.pool5 = nn.MaxPool2d(2, 2)
-        self.dropout5 = nn.Dropout(0.5)
-
-        # Fully connected layers
-        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc1 = nn.Linear(1024, 1024)
-        self.dropout6 = nn.Dropout(0.5)
-        self.fc2 = nn.Linear(1024, num_classes)
-
-    def forward(self, x):
-        x = self.pool1(F.relu(self.bn2(self.conv2(F.relu(self.bn1(self.conv1(x)))))))
-        x = self.dropout1(x)
-
-        x = self.pool2(F.relu(self.bn4(self.conv4(F.relu(self.bn3(self.conv3(x)))))))
-        x = self.dropout2(x)
-
-        x = self.pool3(F.relu(self.bn6(self.conv6(F.relu(self.bn5(self.conv5(x)))))))
-        x = self.dropout3(x)
-
-        x = self.pool4(F.relu(self.bn8(self.conv8(F.relu(self.bn7(self.conv7(x)))))))
-        x = self.dropout4(x)
-
-        x = self.pool5(F.relu(self.bn10(self.conv10(F.relu(self.bn9(self.conv9(x)))))))
-        x = self.dropout5(x)
-
-        x = self.global_avg_pool(x)
-        x = torch.flatten(x, start_dim=1)
-
-        x = F.relu(self.fc1(x))
-        x = self.dropout6(x)
-
-        x = self.fc2(x)
-
-        return x
-
-# Load the model and class names
+# Load the model; architecture, labels and preprocessing are detected from the checkpoint
 @st.cache_resource
 def load_model():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = PlantDiseaseModel()  # Replace with your actual model class
-    model.load_state_dict(torch.load("model_output/plant_disease_modelFinal_45Class15.pth", map_location=device))
-    model.eval()
-    return model
-
-@st.cache_data
-def load_class_names():
-    with open('model_output/class_names.json', 'r') as f:
-        class_names = json.load(f)
-    return class_names
+    return plant_model.load_model()
 
 # LLM Options Configuration
 LLM_CONFIG = {
@@ -113,30 +21,24 @@ LLM_CONFIG = {
         "name": "GPT-4o-mini",
         "api_url": "https://api.openai.com/v1/chat/completions",
         "model_id": "gpt-4o-mini",
-        "temperature": 0.7,
         "needs_api_key": True
     },
     "gpt35_turbo": {
         "name": "GPT-3.5 Turbo",
         "api_url": "https://api.openai.com/v1/chat/completions",
         "model_id": "gpt-3.5-turbo",
-        "temperature": 0.7,
         "needs_api_key": True
     },
     "llama2": {
         "name": "Llama-2-7b",
         "model_id": "meta-llama/Llama-2-7b-chat-hf",
-        "quantization": True,
-        "max_length": 512,
-        "temperature": 0.7,
+        "max_new_tokens": 512,
         "needs_api_key": False
     },
     "phi2": {
         "name": "Phi-2 (Lightweight)",
         "model_id": "microsoft/phi-2",
-        "quantization": True,
-        "max_length": 512,
-        "temperature": 0.7,
+        "max_new_tokens": 512,
         "needs_api_key": False
     },
     "offline": {
@@ -145,46 +47,13 @@ LLM_CONFIG = {
     }
 }
 
-# Load LLM based on configuration settings
+# Load a local Hugging Face text-generation pipeline. Errors propagate to get_advice(),
+# and st.cache_resource does not cache them, so a failed load is retried next time.
 @st.cache_resource
-def load_llm(llm_option="gpt4o_mini"):
-    if llm_option not in LLM_CONFIG:
-        llm_option = "gpt4o_mini"
-        
-    config = LLM_CONFIG[llm_option]
-    
-    # If using an API-based LLM
-    if "api_url" in config:
-        if config.get("needs_api_key", False) and not os.getenv("OPENAI_API_KEY"):
-            st.warning(f"{config['name']} requires an API key. Please enter it in the Settings page.")
-            return None
-        return config
-        
-    # If using offline mode
-    if llm_option == "offline":
-        return None
-        
-    # Using HuggingFace models
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
-        
-        model = AutoModelForCausalLM.from_pretrained(
-            config["model_id"], 
-            load_in_8bit=config.get("load_in_8bit", False),
-            device_map="auto"
-        )
-        
-        pipe = pipeline(
-            "text-generation", 
-            model=model, 
-            tokenizer=tokenizer, 
-            max_length=config.get("max_length", 512), 
-            temperature=config.get("temperature", 0.7)
-        )
-        return pipe
-    except Exception as e:
-        st.error(f"Error loading LLM: {e}")
-        return None
+def load_llm(llm_option):
+    # Imported here so the offline and OpenAI modes do not need transformers installed
+    from transformers import pipeline
+    return pipeline("text-generation", model=LLM_CONFIG[llm_option]["model_id"])
 
 # Create a hash for caching responses
 def create_response_hash(disease_name, llm_option):
@@ -195,28 +64,25 @@ class AdviceCache:
     def __init__(self, max_size=100):
         self.cache = {}
         self.max_size = max_size
+        self.lock = threading.Lock()  # shared by all session threads
         
     def get(self, key):
-        return self.cache.get(key, None)
+        with self.lock:
+            return self.cache.get(key, None)
         
     def set(self, key, value):
-        if len(self.cache) >= self.max_size:
-            # Remove oldest item (simplistic approach)
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-        self.cache[key] = value
-        
-# Initialize cache
-advice_cache = AdviceCache()
+        with self.lock:
+            if key not in self.cache and len(self.cache) >= self.max_size:
+                # Remove oldest item (simplistic approach)
+                oldest_key = next(iter(self.cache))
+                del self.cache[oldest_key]
+            self.cache[key] = value
 
-# Image transformation
-def transform_image(img):
-    transform = transforms.Compose([
-        transforms.Resize((128, 128)), 
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-    ])
-    return transform(img).unsqueeze(0)
+# One cache per server process. A module-level instance would be recreated
+# on every rerun, because Streamlit re-executes this script each time.
+@st.cache_resource
+def get_advice_cache():
+    return AdviceCache()
 
 # Create a prompt for the LLM based on disease name
 def create_disease_prompt(disease_name):
@@ -241,36 +107,37 @@ def create_disease_prompt(disease_name):
     """
 
 # Get treatment advice from LLM
-def get_advice(disease_name, llm_option="gpt4o_mini"):
+def get_advice(disease_name, llm_option="gpt4o_mini", api_key=None, temperature=0.7):
     # Check cache first
     cache_key = create_response_hash(disease_name, llm_option)
-    cached_response = advice_cache.get(cache_key)
+    cached_response = get_advice_cache().get(cache_key)
     if cached_response:
         return cached_response
     
-    # Format disease name for better readability
-    formatted_disease = disease_name.replace('___', ' - ').replace('_', ' ')
-    
-    # Create prompt template for LLM
-    prompt = create_disease_prompt(formatted_disease)
+    # Create prompt template for LLM with a readable disease name
+    prompt = create_disease_prompt(format_label(disease_name))
     
     try:
         # Check which LLM option is selected
         if "api_url" in LLM_CONFIG.get(llm_option, {}):
-            response = get_api_advice(prompt, LLM_CONFIG[llm_option])
+            if not api_key:
+                st.info("No OpenAI API key set, so showing offline advice instead.")
+                return get_fallback_advice(disease_name)
+            response = get_api_advice(prompt, LLM_CONFIG[llm_option], api_key, temperature)
         elif llm_option == "offline":
             response = get_fallback_advice(disease_name)
         else:
-            llm = load_llm(llm_option)
-            if llm is None:
-                return get_fallback_advice(disease_name)
-                
-            generated_text = llm(prompt)[0]['generated_text']
-            # Clean up the response to get only the generated part
-            response = generated_text.split(prompt)[-1].strip()
+            generated = load_llm(llm_option)(
+                prompt,
+                max_new_tokens=LLM_CONFIG[llm_option]["max_new_tokens"],
+                do_sample=True,
+                temperature=temperature,
+                return_full_text=False  # only the answer, not the echoed prompt
+            )
+            response = generated[0]["generated_text"].strip()
         
         # Cache the response
-        advice_cache.set(cache_key, response)
+        get_advice_cache().set(cache_key, response)
         return response
         
     except Exception as e:
@@ -279,10 +146,10 @@ def get_advice(disease_name, llm_option="gpt4o_mini"):
         return get_fallback_advice(disease_name)
 
 # Get advice using API-based LLM (like OpenAI)
-def get_api_advice(prompt, config):
+def get_api_advice(prompt, config, api_key, temperature=0.7):
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
+        "Authorization": f"Bearer {api_key}"
     }
     
     payload = {
@@ -291,7 +158,7 @@ def get_api_advice(prompt, config):
             {"role": "system", "content": "You are an agricultural expert that specializes in plant diseases and their treatments."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": config.get("temperature", 0.7),
+        "temperature": temperature,
         "max_tokens": 1000
     }
     
@@ -436,6 +303,25 @@ def get_fallback_advice(disease_name):
         - Apply before rain events when possible
         """,
         
+        "healthy": """
+        # Healthy Plant
+        
+        ## Assessment
+        No disease was detected on this leaf. Keep monitoring, since problems are easiest to manage when caught early.
+        
+        ## Preventive Care
+        1. Inspect plants weekly, checking both sides of the leaves
+        2. Water at the base of plants, preferably in the morning, to keep foliage dry
+        3. Keep enough spacing and prune to maintain good air circulation
+        4. Remove fallen leaves and plant debris that can harbour pathogens
+        5. Rotate crops and use disease-free seed or transplants
+        6. Maintain balanced nutrition and avoid excess nitrogen
+        
+        ## When to Act
+        - Re-check the plant if spots, discoloration, wilting or unusual growth appear
+        - Isolate or remove plants with suspicious symptoms to limit spread
+        """,
+        
         "default": """
         # Treatment Advice
         
@@ -474,7 +360,12 @@ def get_fallback_advice(disease_name):
         """
     }
     
-    return advice_dict.get(disease_name, advice_dict["default"])
+    # Model labels differ in case (e.g. "Tomato___Early_blight" vs "tomato___early_blight")
+    lookup = {name.lower(): advice for name, advice in advice_dict.items()}
+    key = disease_name.lower()
+    if key not in lookup and key.endswith("___healthy"):
+        key = "healthy"
+    return lookup.get(key, advice_dict["default"])
 
 def generate_unrecognized_markdown(confidence, threshold=20.0):
     return f"""
@@ -492,21 +383,87 @@ def generate_unrecognized_markdown(confidence, threshold=20.0):
     - Use a uniform background if possible
     """
 
+# Render a stored detection result and its treatment advice
+def show_results(result):
+    st.subheader("Detection Results")
+
+    # Display top prediction with confidence
+    predicted_class, top_probability = result["predictions"][0]
+    confidence = top_probability * 100
+    threshold = st.session_state.detection_threshold
+
+    if confidence < threshold:
+        st.warning("🔍 Low Confidence Prediction")
+        st.markdown(generate_unrecognized_markdown(confidence, threshold))
+        return
+
+    st.markdown(f"### Detected Disease: **{format_label(predicted_class)}**")
+    st.progress(confidence / 100)
+    st.markdown(f"Confidence: **{confidence:.2f}%**")
+
+    # Show alternative possibilities
+    st.markdown("### Alternative Possibilities")
+    for alt_class, alt_probability in result["predictions"][1:]:
+        st.markdown(f"- {format_label(alt_class)}: {alt_probability * 100:.2f}%")
+
+    # Generate advice once per detection and LLM choice; reruns reuse it
+    st.subheader("Treatment Advisory")
+    if result.get("advice_llm") != st.session_state.llm_option:
+        with st.spinner("Generating treatment advice..."):
+            try:
+                result["advice"] = get_advice(
+                    predicted_class,
+                    llm_option=st.session_state.llm_option,
+                    api_key=get_api_key(),
+                    temperature=st.session_state.temperature
+                )
+            except Exception as e:
+                st.error(f"Error generating treatment advice: {e}")
+                result["advice"] = get_fallback_advice(predicted_class)
+        result["advice_llm"] = st.session_state.llm_option
+    st.markdown(result["advice"])
+
+    st.download_button(
+        label="Download Treatment Plan",
+        data=result["advice"],
+        file_name=f"{predicted_class}_treatment.md",
+        mime="text/markdown"
+    )
+
+# The visitor's own OpenAI key, else the server's OPENAI_API_KEY. Kept in session state,
+# never in os.environ, which is shared by every session on the server.
+def get_api_key():
+    return st.session_state.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+
 # Main Streamlit app
 def main():
     st.set_page_config(page_title="Plant Disease Detection", page_icon="🌿", layout="wide")
     
     # Initialize session state
     if 'llm_option' not in st.session_state:
-        st.session_state.llm_option = "gpt4o_mini"
+        # GPT models need a key, so start in offline mode unless the server provides one
+        st.session_state.llm_option = "gpt4o_mini" if os.getenv("OPENAI_API_KEY") else "offline"
+
+    if 'temperature' not in st.session_state:
+        st.session_state.temperature = 0.7
     
     if 'detection_threshold' not in st.session_state:
         st.session_state.detection_threshold = 20.0
     
     st.title("🌿 AI-Powered Plant Disease Detection")
-    st.markdown("""
+
+    # Load the model up front so a missing or mismatched checkpoint is reported immediately
+    try:
+        loaded = load_model()
+    except Exception as e:
+        st.error(f"Could not load the disease detection model: {e}")
+        st.stop()
+    plants = supported_plants(loaded.class_names)
+
+    st.markdown(f"""
     Upload an image of a plant leaf to identify diseases and get treatment recommendations.
-    This system can identify diseases across 50+ plant species including wheat, rice, corn, apple, tomato, and more.
+    The current model recognises {len(loaded.class_names)} classes across {len(plants)} plant species:
+    {" · ".join(plants)}.
     """)
     
     # Sidebar for app navigation and settings
@@ -530,10 +487,9 @@ def main():
     
     # API Key input if needed
     if LLM_CONFIG[st.session_state.llm_option].get("needs_api_key", False):
-        api_key = st.sidebar.text_input("OpenAI API Key:", type="password", 
-                                       help="Required for GPT models")
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
+        st.sidebar.text_input("OpenAI API Key:", type="password", key="openai_api_key",
+                              help="Required for GPT models. Used only for your session.")
+        if get_api_key():
             st.sidebar.success("✅ API key configured")
         else:
             st.sidebar.warning("⚠️ API key required for this model")
@@ -550,23 +506,20 @@ def main():
             
             # Model-specific settings for API models
             if st.session_state.llm_option in ["gpt4o_mini", "gpt35_turbo"]:
-                temperature = st.slider(
+                st.session_state.temperature = st.slider(
                     "Temperature (Creativity)",
                     min_value=0.0,
                     max_value=1.0,
-                    value=LLM_CONFIG[st.session_state.llm_option].get("temperature", 0.7),
+                    value=st.session_state.temperature,
                     step=0.1,
                     help="Higher values make output more creative but potentially less accurate"
                 )
-                
-                # Update the config
-                LLM_CONFIG[st.session_state.llm_option]["temperature"] = temperature
                 
         # Detection Threshold
         st.markdown("### Detection Settings")
         detection_threshold = st.slider(
             "Detection confidence threshold (%)",
-            min_value=40.0,
+            min_value=0.0,
             max_value=90.0,
             value=st.session_state.detection_threshold,
             step=5.0,
@@ -577,8 +530,7 @@ def main():
         # Cache Settings
         st.markdown("### Cache Settings")
         if st.button("Clear Advice Cache"):
-            global advice_cache
-            advice_cache = AdviceCache()
+            get_advice_cache.clear()
             st.success("Advice cache cleared successfully")
     
     elif page == "Disease Detection":
@@ -592,92 +544,38 @@ def main():
             st.info(f"Using {llm_options[st.session_state.llm_option]} for advice generation")
             
             if uploaded_file is not None:
-                image = Image.open(uploaded_file).convert('RGB')
-                st.image(image, caption='Uploaded Image', use_container_width=True)
-                
-                # Make prediction when button is clicked
-                if st.button('Detect Disease'):
-                    with st.spinner('Analyzing image...'):
-                        # Load model and class names
-                        model = load_model()
-                        class_names = load_class_names()
-                        
-                        # Transform image and predict
-                        input_tensor = transform_image(image)
-                        
-                        # Move input to the same device as model
-                        device = next(model.parameters()).device
-                        input_tensor = input_tensor.to(device)
-                        
-                        # Get prediction
-                        with torch.no_grad():
-                            output = model(input_tensor)
-                            probabilities = torch.nn.functional.softmax(output[0], dim=0)
-                            
-                        # Get top 3 predictions
-                        top_p, top_class = torch.topk(probabilities, 3)
-                        
-                        # Display results
+                try:
+                    image = Image.open(uploaded_file).convert('RGB')
+                except (UnidentifiedImageError, Image.DecompressionBombError, OSError):
+                    image = None
+                    st.error("Could not read this file as an image. Please upload a JPG or PNG photo of a leaf.")
+
+                if image is not None:
+                    st.image(image, caption='Uploaded Image', width="stretch")
+
+                    # Make prediction when button is clicked
+                    if st.button('Detect Disease'):
+                        with st.spinner('Analyzing image...'):
+                            st.session_state.result = {
+                                "file_id": uploaded_file.file_id,
+                                # Top 3 (class name, probability) pairs
+                                "predictions": plant_model.predict(loaded, image, top_k=3),
+                            }
                         st.success('Analysis complete!')
-                        
-                        # Display prediction results in the second column
+
+                    # Keep showing this image's result on later reruns (download
+                    # button, sidebar changes, ...) instead of only right after the click
+                    result = st.session_state.get("result")
+                    if result is not None and result["file_id"] == uploaded_file.file_id:
                         with col2:
-                            st.subheader("Detection Results")
-                            
-                            # Display top prediction with confidence
-                            predicted_class = class_names[top_class[0]]
-                            confidence = top_p[0].item() * 100
-                            threshold = st.session_state.detection_threshold
+                            show_results(result)
 
-                            if confidence < threshold:
-                                st.warning("🔍 Low Confidence Prediction")
-                                st.markdown(generate_unrecognized_markdown(confidence, threshold))
-                            else:
-                                st.markdown(f"### Detected Disease: **{predicted_class.replace('___', ' - ').replace('_', ' ')}**")
-                                st.progress(confidence / 100)
-                                st.markdown(f"Confidence: **{confidence:.2f}%**")
-
-                                # Show alternative possibilities
-                                st.markdown("### Alternative Possibilities")
-                                for i in range(1, 3):
-                                    alt_class = class_names[top_class[i]]
-                                    alt_confidence = top_p[i].item() * 100
-                                    st.markdown(f"- {alt_class.replace('___', ' - ').replace('_', ' ')}: {alt_confidence:.2f}%")
-
-                                # Get treatment advice for the detected disease with loading indicator
-                                st.subheader("Treatment Advisory")
-                                with st.spinner("Generating treatment advice..."):
-                                    try:
-                                        # Use the selected LLM option from session state
-                                        treatment_advice = get_advice(
-                                            predicted_class, 
-                                            llm_option=st.session_state.llm_option
-                                        )
-                                        st.markdown(treatment_advice)
-                                        
-                                        # Add option to download the advice as PDF
-                                        st.download_button(
-                                            label="Download Treatment Plan",
-                                            data=treatment_advice,
-                                            file_name=f"{predicted_class}_treatment.md",
-                                            mime="text/markdown"
-                                        )
-                                    except Exception as e:
-                                        st.error(f"Error generating treatment advice: {e}")
-                                        st.markdown(get_fallback_advice(predicted_class))
-
-                            
         # If no file is uploaded, show some information
         if uploaded_file is None:
             with col2:
                 st.info("👈 Upload an image to get started!")
+                st.markdown("### Supported Plants\n" + "\n".join(f"- {plant}" for plant in plants))
                 st.markdown("""
-                ### Supported Plants
-                This system can detect diseases in various plants including:
-                - Fruit plants (Apple, Grape, Orange, Peach, Strawberry)
-                - Vegetables (Potato, Tomato, Pepper, Squash, Corn)
-                - Crops (Rice, Wheat, Soybean, Cotton)
-                
                 ### How to Get Best Results
                 - Take clear photos in good lighting
                 - Focus on affected leaves or parts
@@ -685,92 +583,90 @@ def main():
                 - Avoid shadows and glare
                 """)
         
-        elif page == "About":
-            st.subheader("About This Project")
-            st.markdown("""
-            ## Plant Disease Detection with AI
+    elif page == "About":
+        st.subheader("About This Project")
+        st.markdown("""
+        ## Plant Disease Detection with AI
             
-            This application uses deep learning to detect plant diseases from images. It combines:
+        This application uses deep learning to detect plant diseases from images. It combines:
             
-            1. **Convolutional Neural Networks (CNN)** trained on 50+ plant species and their diseases
-            2. **Transfer Learning** with ResNet50 architecture for improved accuracy
-            3. **Natural Language Processing (NLP)** to provide detailed treatment recommendations
+        1. **Convolutional Neural Networks (CNN)**: a custom 5-block CNN trained on 45 classes (14 PlantVillage crops plus rice and wheat)
+        2. **Transfer Learning**: an ImageNet-pretrained ResNet-50 fine-tuned on the 38 PlantVillage classes
+        3. **Large Language Models** to provide detailed treatment recommendations
             
-            ### Data Source
-            The model was trained on the Plant Village dataset containing thousands of images across multiple plant species and disease categories.
+        ### Data Source
+        The models were trained on the New Plant Diseases Dataset (augmented PlantVillage, 38 classes). The 45-class CNN also uses rice and wheat images from the Five Crop Diseases dataset.
             
-            ### LLM Integration
-            This application leverages state-of-the-art language models to provide personalized treatment advice:
+        ### LLM Integration
+        This application leverages state-of-the-art language models to provide personalized treatment advice:
             
-            - **Multiple LLM Options**: Choose between different language models based on your needs
-            - **GPT-4o-mini**: Latest OpenAI model for high quality agricultural advice
-            - **Offline Fallback**: Even without internet access, the system provides reliable advice
+        - **Multiple LLM Options**: Choose between different language models based on your needs
+        - **GPT-4o-mini / GPT-3.5 Turbo**: OpenAI models (requires an API key)
+        - **Offline Fallback**: Without an LLM, built-in advice is shown for common diseases and healthy plants
             
-            ### Team
-            Developed as part of an agricultural AI initiative to help farmers identify and treat plant diseases more effectively and sustainably.
+        ### Team
+        Developed as part of an agricultural AI initiative to help farmers identify and treat plant diseases more effectively and sustainably.
             
-            ### Future Updates
-            - Mobile app for offline use
-            - Integration with weather data for contextualized advice
-            - Region-specific treatment recommendations
-            - Disease progression prediction
-            """)
+        ### Future Updates
+        - Mobile app for offline use
+        - Integration with weather data for contextualized advice
+        - Region-specific treatment recommendations
+        - Disease progression prediction
+        """)
 
     
-        elif page == "How It Works":
-            st.subheader("How It Works")
+    elif page == "How It Works":
+        st.subheader("How It Works")
             
-            st.markdown("""
-            ### Machine Learning Pipeline
+        st.markdown(f"""
+        ### Machine Learning Pipeline
             
-            This application uses a sophisticated AI pipeline to detect plant diseases:
+        This application uses a sophisticated AI pipeline to detect plant diseases:
             
-            1. **Image Processing**:
-            - Your uploaded image is resized and normalized
-            - Data augmentation techniques improve model robustness
+        1. **Image Processing**:
+        - Your uploaded image is resized and normalized exactly as during training
+        - The models were trained with data augmentation for robustness
             
-            2. **Disease Detection**:
-            - A CNN-based neural network analyzes the image
-            - The model was trained on 38 disease classes across different plants
-            - Transfer learning improves accuracy even with limited training data
+        2. **Disease Detection**:
+        - A CNN-based neural network analyzes the image
+        - The loaded model ({"ResNet-50" if loaded.arch == "resnet50" else "custom CNN"}) predicts {len(loaded.class_names)} classes across {len(plants)} plant species
+        - Predictions below the confidence threshold (Settings) are reported as unrecognised
             
-            3. **Advisory System**:
-            - Large Language Models generate contextual treatment advice
-            - Multiple LLM options available based on your needs:
-                - Llama-2-7b: High quality, comprehensive advice
-                - Phi-2: Faster, lightweight option
-                - GPT-3.5: API-based option with excellent response quality
-                - Offline mode: Uses predefined responses for key diseases
-            - Recommendations include organic and chemical treatment options
-            - Preventive measures and best practices are provided
+        3. **Advisory System**:
+        - Large Language Models generate contextual treatment advice
+        - Multiple LLM options available based on your needs:
+            - Llama-2-7b: High quality, comprehensive advice
+            - Phi-2: Faster, lightweight option
+            - GPT-4o-mini / GPT-3.5: API-based options (OpenAI key required)
+            - Offline mode: Uses predefined responses for key diseases
+        - Recommendations include organic and chemical treatment options
+        - Preventive measures and best practices are provided
             
-            ### Technologies Used
+        ### Technologies Used
             
-            - **PyTorch**: Deep learning framework for model development
-            - **Streamlit**: Web application framework
-            - **Transformers**: NLP models for treatment recommendations
-            - **Transfer Learning**: Leveraging pre-trained neural networks
+        - **PyTorch**: Deep learning framework for model development
+        - **Streamlit**: Web application framework
+        - **Transformers**: NLP models for treatment recommendations
+        - **Transfer Learning**: Leveraging pre-trained neural networks
             
-            ### Technical Performance
+        ### Technical Performance
             
-            - Model Accuracy: ~96% on test dataset
-            - Inference Time: 0.2-0.5 seconds per image
-            - Support for 38+ different plant disease categories
-            """)
-            # Add a sample confusion matrix or performance visualization
-            MODEL_DIR = 'model_output'
-            try:
-                # Load confusion matrix visualization
-                cm_path = os.path.join(MODEL_DIR, 'confusion_matrix.png')
-                if os.path.exists(cm_path):
-                    st.subheader("Confusion Matrix")
-                    st.image(cm_path)
-                else:
-                    st.info("Confusion matrix visualization not available.")
+        - ResNet-50 (38 classes): about 97% on the 17,572-image validation split (confusion matrix below)
+        - Custom CNN (45 classes): 96.8% on a 12,435-image held-out split
+        """)
+        # Add a sample confusion matrix or performance visualization
+        try:
+            # Load confusion matrix visualization
+            cm_path = os.path.join(plant_model.MODEL_DIR, 'confusion_matrix.png')
+            if os.path.exists(cm_path):
+                st.subheader("Confusion Matrix (ResNet-50, validation split)")
+                st.image(cm_path)
+            else:
+                st.info("Confusion matrix visualization not available.")
                     
-            except Exception as e:
-                st.error(f"Error loading performance metrics: {e}")
-                st.warning("Performance visualizations may not be available.")
+        except Exception as e:
+            st.error(f"Error loading performance metrics: {e}")
+            st.warning("Performance visualizations may not be available.")
 
 if __name__ == "__main__":
     main()
