@@ -340,6 +340,25 @@ def get_fallback_advice(disease_name):
         - Apply before rain events when possible
         """,
         
+        "healthy": """
+        # Healthy Plant
+        
+        ## Assessment
+        No disease was detected on this leaf. Keep monitoring, since problems are easiest to manage when caught early.
+        
+        ## Preventive Care
+        1. Inspect plants weekly, checking both sides of the leaves
+        2. Water at the base of plants, preferably in the morning, to keep foliage dry
+        3. Keep enough spacing and prune to maintain good air circulation
+        4. Remove fallen leaves and plant debris that can harbour pathogens
+        5. Rotate crops and use disease-free seed or transplants
+        6. Maintain balanced nutrition and avoid excess nitrogen
+        
+        ## When to Act
+        - Re-check the plant if spots, discoloration, wilting or unusual growth appear
+        - Isolate or remove plants with suspicious symptoms to limit spread
+        """,
+        
         "default": """
         # Treatment Advice
         
@@ -378,7 +397,12 @@ def get_fallback_advice(disease_name):
         """
     }
     
-    return advice_dict.get(disease_name, advice_dict["default"])
+    # Model labels differ in case (e.g. "Tomato___Early_blight" vs "tomato___early_blight")
+    lookup = {name.lower(): advice for name, advice in advice_dict.items()}
+    key = disease_name.lower()
+    if key not in lookup and key.endswith("___healthy"):
+        key = "healthy"
+    return lookup.get(key, advice_dict["default"])
 
 def generate_unrecognized_markdown(confidence, threshold=20.0):
     return f"""
