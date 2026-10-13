@@ -1,111 +1,19 @@
-# app.py - Enhanced Streamlit web application for plant disease detection with LLM integration
+# deploy.py - Streamlit web application for plant disease detection with LLM integration
 import streamlit as st
-import torch
-import torchvision.transforms as transforms
 from PIL import Image
-import json
-import numpy as np
 import requests
-import io 
 import os
 import hashlib
-import time
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+
+import plant_model
+from plant_model import format_label
 
 
-class PlantDiseaseModel(nn.Module):
-    def __init__(self, num_classes=45):
-        super(PlantDiseaseModel, self).__init__()
-
-        # Block 1
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.dropout1 = nn.Dropout(0.3)
-
-        # Block 2
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm2d(128)
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.dropout2 = nn.Dropout(0.3)
-
-        # Block 3
-        self.conv5 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.bn5 = nn.BatchNorm2d(256)
-        self.conv6 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.bn6 = nn.BatchNorm2d(256)
-        self.pool3 = nn.MaxPool2d(2, 2)
-        self.dropout3 = nn.Dropout(0.4)
-
-        # Block 4
-        self.conv7 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
-        self.bn7 = nn.BatchNorm2d(512)
-        self.conv8 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.bn8 = nn.BatchNorm2d(512)
-        self.pool4 = nn.MaxPool2d(2, 2)
-        self.dropout4 = nn.Dropout(0.4)
-
-        # Block 5 (Extra Layers for Depth)
-        self.conv9 = nn.Conv2d(512, 1024, kernel_size=3, padding=1)
-        self.bn9 = nn.BatchNorm2d(1024)
-        self.conv10 = nn.Conv2d(1024, 1024, kernel_size=3, padding=1)
-        self.bn10 = nn.BatchNorm2d(1024)
-        self.pool5 = nn.MaxPool2d(2, 2)
-        self.dropout5 = nn.Dropout(0.5)
-
-        # Fully connected layers
-        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc1 = nn.Linear(1024, 1024)
-        self.dropout6 = nn.Dropout(0.5)
-        self.fc2 = nn.Linear(1024, num_classes)
-
-    def forward(self, x):
-        x = self.pool1(F.relu(self.bn2(self.conv2(F.relu(self.bn1(self.conv1(x)))))))
-        x = self.dropout1(x)
-
-        x = self.pool2(F.relu(self.bn4(self.conv4(F.relu(self.bn3(self.conv3(x)))))))
-        x = self.dropout2(x)
-
-        x = self.pool3(F.relu(self.bn6(self.conv6(F.relu(self.bn5(self.conv5(x)))))))
-        x = self.dropout3(x)
-
-        x = self.pool4(F.relu(self.bn8(self.conv8(F.relu(self.bn7(self.conv7(x)))))))
-        x = self.dropout4(x)
-
-        x = self.pool5(F.relu(self.bn10(self.conv10(F.relu(self.bn9(self.conv9(x)))))))
-        x = self.dropout5(x)
-
-        x = self.global_avg_pool(x)
-        x = torch.flatten(x, start_dim=1)
-
-        x = F.relu(self.fc1(x))
-        x = self.dropout6(x)
-
-        x = self.fc2(x)
-
-        return x
-
-# Load the model and class names
+# Load the model; architecture, labels and preprocessing are detected from the checkpoint
 @st.cache_resource
 def load_model():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = PlantDiseaseModel()  # Replace with your actual model class
-    model.load_state_dict(torch.load("model_output/plant_disease_modelFinal_45Class15.pth", map_location=device))
-    model.eval()
-    return model
-
-@st.cache_data
-def load_class_names():
-    with open('model_output/class_names.json', 'r') as f:
-        class_names = json.load(f)
-    return class_names
+    return plant_model.load_model()
 
 # LLM Options Configuration
 LLM_CONFIG = {
@@ -209,15 +117,6 @@ class AdviceCache:
 # Initialize cache
 advice_cache = AdviceCache()
 
-# Image transformation
-def transform_image(img):
-    transform = transforms.Compose([
-        transforms.Resize((128, 128)), 
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-    ])
-    return transform(img).unsqueeze(0)
-
 # Create a prompt for the LLM based on disease name
 def create_disease_prompt(disease_name):
     return f"""
@@ -248,11 +147,8 @@ def get_advice(disease_name, llm_option="gpt4o_mini"):
     if cached_response:
         return cached_response
     
-    # Format disease name for better readability
-    formatted_disease = disease_name.replace('___', ' - ').replace('_', ' ')
-    
-    # Create prompt template for LLM
-    prompt = create_disease_prompt(formatted_disease)
+    # Create prompt template for LLM with a readable disease name
+    prompt = create_disease_prompt(format_label(disease_name))
     
     try:
         # Check which LLM option is selected
@@ -598,51 +494,33 @@ def main():
                 # Make prediction when button is clicked
                 if st.button('Detect Disease'):
                     with st.spinner('Analyzing image...'):
-                        # Load model and class names
-                        model = load_model()
-                        class_names = load_class_names()
-                        
-                        # Transform image and predict
-                        input_tensor = transform_image(image)
-                        
-                        # Move input to the same device as model
-                        device = next(model.parameters()).device
-                        input_tensor = input_tensor.to(device)
-                        
-                        # Get prediction
-                        with torch.no_grad():
-                            output = model(input_tensor)
-                            probabilities = torch.nn.functional.softmax(output[0], dim=0)
-                            
-                        # Get top 3 predictions
-                        top_p, top_class = torch.topk(probabilities, 3)
-                        
+                        # Top 3 (class name, probability) pairs
+                        predictions = plant_model.predict(load_model(), image, top_k=3)
+
                         # Display results
                         st.success('Analysis complete!')
-                        
+
                         # Display prediction results in the second column
                         with col2:
                             st.subheader("Detection Results")
-                            
+
                             # Display top prediction with confidence
-                            predicted_class = class_names[top_class[0]]
-                            confidence = top_p[0].item() * 100
+                            predicted_class = predictions[0][0]
+                            confidence = predictions[0][1] * 100
                             threshold = st.session_state.detection_threshold
 
                             if confidence < threshold:
                                 st.warning("🔍 Low Confidence Prediction")
                                 st.markdown(generate_unrecognized_markdown(confidence, threshold))
                             else:
-                                st.markdown(f"### Detected Disease: **{predicted_class.replace('___', ' - ').replace('_', ' ')}**")
+                                st.markdown(f"### Detected Disease: **{format_label(predicted_class)}**")
                                 st.progress(confidence / 100)
                                 st.markdown(f"Confidence: **{confidence:.2f}%**")
 
                                 # Show alternative possibilities
                                 st.markdown("### Alternative Possibilities")
-                                for i in range(1, 3):
-                                    alt_class = class_names[top_class[i]]
-                                    alt_confidence = top_p[i].item() * 100
-                                    st.markdown(f"- {alt_class.replace('___', ' - ').replace('_', ' ')}: {alt_confidence:.2f}%")
+                                for alt_class, alt_probability in predictions[1:]:
+                                    st.markdown(f"- {format_label(alt_class)}: {alt_probability * 100:.2f}%")
 
                                 # Get treatment advice for the detected disease with loading indicator
                                 st.subheader("Treatment Advisory")
@@ -758,10 +636,9 @@ def main():
             - Support for 38+ different plant disease categories
             """)
             # Add a sample confusion matrix or performance visualization
-            MODEL_DIR = 'model_output'
             try:
                 # Load confusion matrix visualization
-                cm_path = os.path.join(MODEL_DIR, 'confusion_matrix.png')
+                cm_path = os.path.join(plant_model.MODEL_DIR, 'confusion_matrix.png')
                 if os.path.exists(cm_path):
                     st.subheader("Confusion Matrix")
                     st.image(cm_path)
