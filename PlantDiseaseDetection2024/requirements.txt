@@ -1,0 +1,5 @@
+# Streamlit app: streamlit run site.py
+streamlit>=1.49        # st.image(width="stretch")
+tensorflow>=2.16       # trainedFuture.keras is a Keras 3 model
+numpy
+pillow

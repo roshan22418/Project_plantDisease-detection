@@ -1,0 +1,9 @@
+# Streamlit app: streamlit run app.py  (or deployfinalcode/deploy.py)
+streamlit>=1.49        # st.image(width="stretch")
+torch>=2.0
+torchvision>=0.15      # resnet50(weights=None)
+pillow
+requests               # OpenAI API advice
+
+# Optional: local Llama-2 / Phi-2 advice
+# transformers>=4.40
