@@ -4,6 +4,7 @@ from PIL import Image
 import requests
 import os
 import hashlib
+import threading
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 
 import plant_model
@@ -101,19 +102,25 @@ class AdviceCache:
     def __init__(self, max_size=100):
         self.cache = {}
         self.max_size = max_size
+        self.lock = threading.Lock()  # shared by all session threads
         
     def get(self, key):
-        return self.cache.get(key, None)
+        with self.lock:
+            return self.cache.get(key, None)
         
     def set(self, key, value):
-        if len(self.cache) >= self.max_size:
-            # Remove oldest item (simplistic approach)
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-        self.cache[key] = value
-        
-# Initialize cache
-advice_cache = AdviceCache()
+        with self.lock:
+            if key not in self.cache and len(self.cache) >= self.max_size:
+                # Remove oldest item (simplistic approach)
+                oldest_key = next(iter(self.cache))
+                del self.cache[oldest_key]
+            self.cache[key] = value
+
+# One cache per server process. A module-level instance would be recreated
+# on every rerun, because Streamlit re-executes this script each time.
+@st.cache_resource
+def get_advice_cache():
+    return AdviceCache()
 
 # Create a prompt for the LLM based on disease name
 def create_disease_prompt(disease_name):
@@ -141,7 +148,7 @@ def create_disease_prompt(disease_name):
 def get_advice(disease_name, llm_option="gpt4o_mini", api_key=None, temperature=0.7):
     # Check cache first
     cache_key = create_response_hash(disease_name, llm_option)
-    cached_response = advice_cache.get(cache_key)
+    cached_response = get_advice_cache().get(cache_key)
     if cached_response:
         return cached_response
     
@@ -167,7 +174,7 @@ def get_advice(disease_name, llm_option="gpt4o_mini", api_key=None, temperature=
             response = generated_text.split(prompt)[-1].strip()
         
         # Cache the response
-        advice_cache.set(cache_key, response)
+        get_advice_cache().set(cache_key, response)
         return response
         
     except Exception as e:
@@ -479,8 +486,7 @@ def main():
         # Cache Settings
         st.markdown("### Cache Settings")
         if st.button("Clear Advice Cache"):
-            global advice_cache
-            advice_cache = AdviceCache()
+            get_advice_cache.clear()
             st.success("Advice cache cleared successfully")
     
     elif page == "Disease Detection":
