@@ -5,7 +5,6 @@ import requests
 import os
 import hashlib
 import threading
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 
 import plant_model
 from plant_model import format_label
@@ -33,17 +32,13 @@ LLM_CONFIG = {
     "llama2": {
         "name": "Llama-2-7b",
         "model_id": "meta-llama/Llama-2-7b-chat-hf",
-        "quantization": True,
-        "max_length": 512,
-        "temperature": 0.7,
+        "max_new_tokens": 512,
         "needs_api_key": False
     },
     "phi2": {
         "name": "Phi-2 (Lightweight)",
         "model_id": "microsoft/phi-2",
-        "quantization": True,
-        "max_length": 512,
-        "temperature": 0.7,
+        "max_new_tokens": 512,
         "needs_api_key": False
     },
     "offline": {
@@ -52,46 +47,13 @@ LLM_CONFIG = {
     }
 }
 
-# Load LLM based on configuration settings
+# Load a local Hugging Face text-generation pipeline. Errors propagate to get_advice(),
+# and st.cache_resource does not cache them, so a failed load is retried next time.
 @st.cache_resource
-def load_llm(llm_option="gpt4o_mini"):
-    if llm_option not in LLM_CONFIG:
-        llm_option = "gpt4o_mini"
-        
-    config = LLM_CONFIG[llm_option]
-    
-    # If using an API-based LLM
-    if "api_url" in config:
-        if config.get("needs_api_key", False) and not os.getenv("OPENAI_API_KEY"):
-            st.warning(f"{config['name']} requires an API key. Please enter it in the Settings page.")
-            return None
-        return config
-        
-    # If using offline mode
-    if llm_option == "offline":
-        return None
-        
-    # Using HuggingFace models
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
-        
-        model = AutoModelForCausalLM.from_pretrained(
-            config["model_id"], 
-            load_in_8bit=config.get("load_in_8bit", False),
-            device_map="auto"
-        )
-        
-        pipe = pipeline(
-            "text-generation", 
-            model=model, 
-            tokenizer=tokenizer, 
-            max_length=config.get("max_length", 512), 
-            temperature=config.get("temperature", 0.7)
-        )
-        return pipe
-    except Exception as e:
-        st.error(f"Error loading LLM: {e}")
-        return None
+def load_llm(llm_option):
+    # Imported here so the offline and OpenAI modes do not need transformers installed
+    from transformers import pipeline
+    return pipeline("text-generation", model=LLM_CONFIG[llm_option]["model_id"])
 
 # Create a hash for caching responses
 def create_response_hash(disease_name, llm_option):
@@ -165,13 +127,14 @@ def get_advice(disease_name, llm_option="gpt4o_mini", api_key=None, temperature=
         elif llm_option == "offline":
             response = get_fallback_advice(disease_name)
         else:
-            llm = load_llm(llm_option)
-            if llm is None:
-                return get_fallback_advice(disease_name)
-                
-            generated_text = llm(prompt)[0]['generated_text']
-            # Clean up the response to get only the generated part
-            response = generated_text.split(prompt)[-1].strip()
+            generated = load_llm(llm_option)(
+                prompt,
+                max_new_tokens=LLM_CONFIG[llm_option]["max_new_tokens"],
+                do_sample=True,
+                temperature=temperature,
+                return_full_text=False  # only the answer, not the echoed prompt
+            )
+            response = generated[0]["generated_text"].strip()
         
         # Cache the response
         get_advice_cache().set(cache_key, response)
